@@ -1,0 +1,8 @@
+import { NextResponse } from 'next/server';
+import { withRls, errorResponse } from '@/lib/db';
+import { requireUser } from '@/lib/server-auth';
+import { z } from 'zod';
+const schema=z.object({title:z.string().trim().min(1).max(300).optional(),notes:z.string().max(5000).optional(),completed:z.boolean().optional(),todoDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),position:z.number().int().min(0).optional()});
+const dateOnly=(s:string)=>new Date(`${s}T00:00:00.000Z`);
+export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}){try{const user=await requireUser();const {id}=await params;const input=schema.parse(await req.json());const updated=await withRls(user.id,async tx=>{const todo=await tx.todo.findFirst({where:{id,ownerId:user.id}});if(!todo)throw new Error('NOT_FOUND');const nextDate=input.todoDate?dateOnly(input.todoDate):todo.todoDate;let nextPosition=input.position;if(input.todoDate&&nextDate.getTime()!==todo.todoDate.getTime()&&nextPosition===undefined){const max=await tx.todo.aggregate({where:{ownerId:user.id,todoDate:nextDate},_max:{position:true}});nextPosition=(max._max.position??-1)+1;}return tx.todo.update({where:{id},data:{title:input.title,notes:input.notes,completed:input.completed,position:nextPosition,todoDate:input.todoDate?nextDate:undefined}})});return NextResponse.json({todo:updated})}catch(e){return errorResponse(e)}}
+export async function DELETE(_req:Request,{params}:{params:Promise<{id:string}>}){try{const user=await requireUser();const {id}=await params;const result=await withRls(user.id,tx=>tx.todo.deleteMany({where:{id,ownerId:user.id}}));if(!result.count)return new Response('Not found',{status:404});return NextResponse.json({ok:true})}catch(e){return errorResponse(e)}}

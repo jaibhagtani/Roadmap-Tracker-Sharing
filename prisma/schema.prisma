@@ -1,0 +1,266 @@
+model User {
+  id           String               @id @default(uuid()) @db.Uuid
+  email        String               @unique
+  fullName     String               @map("full_name")
+  passwordHash String               @map("password_hash")
+  createdAt    DateTime             @default(now()) @map("created_at")
+  updatedAt    DateTime             @updatedAt @map("updated_at")
+  sessions     Session[]
+  resetTokens  PasswordResetToken[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @db.VarChar(64)
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String   @id @db.VarChar(64)
+  userId    String   @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "env("DATABASE_URL")"
+}
+
+model Roadmap {
+  id            String         @id @default(uuid()) @db.Uuid
+  ownerId       String         @map("owner_id") @db.VarChar(255)
+  title         String
+  description   String         @default("")
+  privacy       Privacy        @default(private)
+  shareSlug     String         @unique @default(cuid()) @map("share_slug")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  topics        Topic[]
+  goals         Goal[]
+  shares        RoadmapShare[]
+  shareRequests ShareRequest[]
+  topicShares   TopicShare[]
+  todos         Todo[]
+
+  @@map("roadmaps")
+}
+
+model Topic {
+  id            String         @id @default(uuid()) @db.Uuid
+  roadmapId     String         @map("roadmap_id") @db.Uuid
+  parentId      String?        @map("parent_id") @db.Uuid
+  title         String
+  description   String         @default("")
+  notes         String         @default("")
+  status        Status         @default(not_started)
+  progress      Int            @default(0)
+  priority      Int            @default(0)
+  position      Int            @default(0)
+  tags          String[]       @default([])
+  dueDate       DateTime?      @map("due_date") @db.Date
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  roadmap       Roadmap        @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  resources     Resource[]
+  todos         Todo[]
+  topicShares   TopicShare[]
+  shareRequests ShareRequest[]
+
+  @@index([roadmapId, parentId, position])
+  @@map("topics")
+}
+
+model Resource {
+  id        String   @id @default(uuid()) @db.Uuid
+  topicId   String   @map("topic_id") @db.Uuid
+  title     String
+  url       String
+  type      String   @default("other")
+  notes     String   @default("")
+  completed Boolean  @default(false)
+  favorite  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@index([topicId])
+  @@map("resources")
+}
+
+model Todo {
+  id        String   @id @default(uuid()) @db.Uuid
+  ownerId   String   @map("owner_id") @db.VarChar(255)
+  roadmapId String?  @map("roadmap_id") @db.Uuid
+  topicId   String?  @map("topic_id") @db.Uuid
+  todoDate  DateTime @map("todo_date") @db.Date
+  title     String
+  notes     String   @default("")
+  completed Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  roadmap   Roadmap? @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  topic     Topic?   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, todoDate, position])
+  @@map("todos")
+}
+
+model DailyLog {
+  id                 String   @id @default(uuid()) @db.Uuid
+  ownerId            String   @map("owner_id") @db.VarChar(255)
+  logDate            DateTime @map("log_date") @db.Date
+  studyMinutes       Int      @default(0) @map("study_minutes")
+  topicsStudied      String[] @default([]) @map("topics_studied")
+  resourcesCompleted Int      @default(0) @map("resources_completed")
+  problemsSolved     Int      @default(0) @map("problems_solved")
+  learned            String   @default("")
+  difficulties       String   @default("")
+  tomorrowGoal       String   @default("") @map("tomorrow_goal")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@unique([ownerId, logDate])
+  @@map("daily_logs")
+}
+
+model Goal {
+  id          String    @id @default(uuid()) @db.Uuid
+  ownerId     String    @map("owner_id") @db.VarChar(255)
+  roadmapId   String?   @map("roadmap_id") @db.Uuid
+  title       String
+  description String    @default("")
+  deadline    DateTime? @db.Date
+  progress    Int       @default(0)
+  status      Status    @default(in_progress)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  roadmap     Roadmap?  @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, deadline])
+  @@map("goals")
+}
+
+model Template {
+  id            String          @id @default(uuid()) @db.Uuid
+  name          String          @unique
+  description   String          @default("")
+  tree          Json
+  createdAt     DateTime        @default(now()) @map("created_at")
+  shareRequests ShareRequest[]
+  shares        TemplateShare[]
+
+  @@map("templates")
+}
+
+model Profile {
+  id        String   @id @map("id") @db.VarChar(255)
+  fullName  String   @default("") @map("full_name")
+  avatarUrl String   @default("") @map("avatar_url")
+  bio       String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("profiles")
+}
+
+enum Status {
+  not_started
+  in_progress
+  completed
+}
+
+enum Privacy {
+  private
+  link
+  public
+}
+
+model RoadmapShare {
+  id        String   @id @default(uuid()) @db.Uuid
+  roadmapId String   @map("roadmap_id") @db.Uuid
+  userId    String   @map("user_id") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  roadmap   Roadmap  @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+
+  @@unique([roadmapId, userId])
+  @@index([userId])
+  @@map("roadmap_shares")
+}
+
+model ShareRequest {
+  id            String         @id @default(uuid()) @db.Uuid
+  roadmapId     String?        @map("roadmap_id") @db.Uuid
+  rootTopicId   String?        @map("root_topic_id") @db.Uuid
+  templateId    String?        @map("template_id") @db.Uuid
+  scopeType     String         @default("roadmap") @map("scope_type")
+  senderId      String         @map("sender_id") @db.VarChar(255)
+  receiverId    String         @map("receiver_id") @db.VarChar(255)
+  message       String         @default("")
+  status        String         @default("pending")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  roadmap       Roadmap?       @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  rootTopic     Topic?         @relation(fields: [rootTopicId], references: [id], onDelete: Cascade)
+  template      Template?      @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+
+  @@index([receiverId, status, createdAt])
+  @@index([senderId, createdAt])
+  @@index([roadmapId, rootTopicId, receiverId, status])
+  @@map("share_requests")
+}
+
+model TopicShare {
+  id        String   @id @default(uuid()) @db.Uuid
+  topicId   String   @map("topic_id") @db.Uuid
+  userId    String   @map("user_id") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  Roadmap   Roadmap? @relation(fields: [roadmapId], references: [id])
+  roadmapId String?  @db.Uuid
+
+  @@unique([topicId, userId])
+  @@index([userId])
+  @@map("topic_shares")
+}
+
+model TemplateShare {
+  id         String   @id @default(uuid()) @db.Uuid
+  templateId String   @map("template_id") @db.Uuid
+  userId     String   @map("user_id") @db.VarChar(255)
+  createdAt  DateTime @default(now()) @map("created_at")
+  template   Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, userId])
+  @@index([userId])
+  @@map("template_shares")
+}
+
+model Notification {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @map("user_id") @db.VarChar(255)
+  type           String
+  title          String
+  body           String        @default("")
+  shareRequestId String?       @map("share_request_id") @db.Uuid
+  readAt         DateTime?     @map("read_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  shareRequest   ShareRequest? @relation(fields: [shareRequestId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}

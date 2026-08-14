@@ -1,0 +1,1 @@
+import {Sidebar} from './sidebar'; export function AppShell({children}:{children:React.ReactNode}){return <><Sidebar/><main className="min-h-screen lg:pl-64"><div className="mx-auto max-w-[1500px] p-5 md:p-8">{children}</div></main></>}

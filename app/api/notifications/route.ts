@@ -1,0 +1,3 @@
+import { NextResponse } from 'next/server'; import { withRls } from '@/lib/db'; import { requireUser } from '@/lib/server-auth';
+export async function GET(){const user=await requireUser();const notifications=await withRls(user.id,tx=>tx.notification.findMany({where:{userId:user.id},orderBy:{createdAt:'desc'},take:50}));return NextResponse.json({notifications});}
+export async function PATCH(req:Request){const user=await requireUser();const body=await req.json();const n=await withRls(user.id,tx=>body.id?tx.notification.updateMany({where:{id:body.id,userId:user.id},data:{readAt:new Date()}}):tx.notification.updateMany({where:{userId:user.id,readAt:null},data:{readAt:new Date()}}));return NextResponse.json({count:n.count});}

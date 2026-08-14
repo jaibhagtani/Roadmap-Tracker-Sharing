@@ -1,0 +1,2 @@
+import { NextResponse } from 'next/server'; import { db } from '@/lib/db';
+export async function GET(_req:Request,{params}:{params:Promise<{slug:string}>}){const {slug}=await params;const roadmap=await db.roadmap.findFirst({where:{shareSlug:slug,OR:[{privacy:'public'},{privacy:'link'}]},include:{topics:{include:{resources:true},orderBy:{position:'asc'}}}});if(!roadmap)return new NextResponse('Not found',{status:404});return NextResponse.json({roadmap});}
