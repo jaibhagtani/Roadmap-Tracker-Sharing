@@ -3,12 +3,14 @@ import { withRls } from '@/lib/db';
 import { requireUser } from '@/lib/server-auth';
 
 function buildTree(topics: any[]) {
-  const map = new Map(topics.map(t => [t.id, { id: t.id, parentId: t.parentId, title: t.title, description: t.description, notes: t.notes, status: t.status, progress: t.progress, priority: t.priority, position: t.position, tags: t.tags, dueDate: t.dueDate, resources: t.resources.map((r:any) => ({ title: r.title, url: r.url, type: r.type, notes: r.notes, completed: r.completed, favorite: r.favorite })), children: [] }]));
+  const map = new Map<string, any>(topics.map(t => [t.id, { id: t.id, parentId: t.parentId, title: t.title, description: t.description, notes: t.notes, status: t.status, progress: t.progress, priority: t.priority, position: t.position, tags: t.tags, dueDate: t.dueDate, resources: t.resources.map((r:any) => ({ title: r.title, url: r.url, type: r.type, notes: r.notes, completed: r.completed, favorite: r.favorite })), children: [] }]));
   const roots: any[] = [];
   for (const topic of topics) {
     const node: any = map.get(topic.id);
-    if (topic.parentId && map.has(topic.parentId)) map.get(topic.parentId).children.push(node);
-    else roots.push(node);
+    if (topic.parentId && map.has(topic.parentId)) {
+      const parent = map.get(topic.parentId);
+      if (parent) parent.children.push(node);
+    } else roots.push(node);
   }
   const sort = (nodes:any[]) => { nodes.sort((a,b) => a.position - b.position); nodes.forEach(n => sort(n.children)); };
   sort(roots);

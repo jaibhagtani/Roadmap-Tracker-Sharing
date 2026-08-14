@@ -6,7 +6,7 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db;
 
 export async function withRls<T>(userId: string, fn: (tx: Prisma.TransactionClient) => Promise<T>) {
   if (!userId) throw new Error('Missing authenticated user');
-  return db.$transaction(async (tx) => {
+  return db.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`select set_config('app.user_id', ${userId}, true)`;
     return fn(tx);
   });

@@ -142,7 +142,7 @@ export function RoadmapTree() {
       title: name.trim(),
     });
 
-    setRoadmap({ ...roadmap, topics: [...roadmap.topics, j.topic] });
+    setRoadmap(prev => prev ? { ...prev, topics: [...prev.topics, j.topic] } : prev);
     setSelected(j.topic.id);
     if (parentId) setOpen(o => ({ ...o, [parentId]: true }));
   }
@@ -154,7 +154,7 @@ export function RoadmapTree() {
       description: roadmap.description,
       privacy: roadmap.privacy,
     });
-    setRoadmap({ ...roadmap, ...j.roadmap });
+    setRoadmap(prev => prev ? { ...prev, ...j.roadmap } : prev);
     flash('Roadmap saved');
   }
 
@@ -171,10 +171,10 @@ export function RoadmapTree() {
       dueDate: current.dueDate,
     });
 
-    setRoadmap({
-      ...roadmap,
-      topics: roadmap.topics.map(t => t.id === current.id ? { ...t, ...j.topic } : t),
-    });
+    setRoadmap(prev => prev ? {
+      ...prev,
+      topics: prev.topics.map(t => t.id === current.id ? { ...t, ...j.topic } : t),
+    } : prev);
     flash('Topic saved');
   }
 
@@ -199,10 +199,10 @@ export function RoadmapTree() {
       url: url.trim(),
     });
 
-    setRoadmap({
-      ...roadmap,
-      topics: roadmap.topics.map(t => t.id === current.id ? { ...t, resources: [...t.resources, j.resource] } : t),
-    });
+    setRoadmap(prev => prev ? {
+      ...prev,
+      topics: prev.topics.map(t => t.id === current.id ? { ...t, resources: [...t.resources, j.resource] } : t),
+    } : prev);
   }
 
   async function editResource(r: Resource) {
@@ -219,39 +219,39 @@ export function RoadmapTree() {
       notes: r.notes,
     });
 
-    setRoadmap({
-      ...roadmap,
-      topics: roadmap.topics.map(t => t.id === current?.id ? {
+    setRoadmap(prev => prev ? {
+      ...prev,
+      topics: prev.topics.map(t => t.id === current?.id ? {
         ...t,
         resources: t.resources.map(x => x.id === r.id ? { ...x, ...j.resource } : x),
       } : t),
-    });
+    } : prev);
   }
 
   async function toggleResource(r: Resource, key: 'completed' | 'favorite') {
     if (!current || !roadmap) return;
     const j = await call(`/api/resources/${r.id}`, 'PATCH', { [key]: !r[key] });
 
-    setRoadmap({
-      ...roadmap,
-      topics: roadmap.topics.map(t => t.id === current.id ? {
+    setRoadmap(prev => prev ? {
+      ...prev,
+      topics: prev.topics.map(t => t.id === current.id ? {
         ...t,
         resources: t.resources.map(x => x.id === r.id ? { ...x, ...j.resource } : x),
       } : t),
-    });
+    } : prev);
   }
 
   async function deleteResource(r: Resource) {
     if (!current || !roadmap || !confirm('Delete this resource?')) return;
     await call(`/api/resources/${r.id}`, 'DELETE');
 
-    setRoadmap({
-      ...roadmap,
-      topics: roadmap.topics.map(t => t.id === current.id ? {
+    setRoadmap(prev => prev ? {
+      ...prev,
+      topics: prev.topics.map(t => t.id === current.id ? {
         ...t,
         resources: t.resources.filter(x => x.id !== r.id),
       } : t),
-    });
+    } : prev);
   }
 
   async function sendShare(scopeType: 'roadmap' | 'topic') {
@@ -278,10 +278,10 @@ export function RoadmapTree() {
 
     try {
       const j = await call(`/api/topics/${sourceId}`, 'PATCH', { parentId: targetId });
-      setRoadmap({
-        ...roadmap,
-        topics: roadmap.topics.map(t => t.id === sourceId ? { ...t, ...j.topic } : t),
-      });
+      setRoadmap(prev => prev ? {
+        ...prev,
+        topics: prev.topics.map(t => t.id === sourceId ? { ...t, ...j.topic } : t),
+      } : prev);
       setOpen(o => ({ ...o, [targetId]: true }));
       flash('Topic moved');
     } catch (e) {
@@ -348,12 +348,12 @@ export function RoadmapTree() {
         <Card className="min-h-[720px] overflow-hidden">
           <div className="border-b border-[hsl(var(--line))] p-5">
             <div className="flex items-center gap-3">
-              <input value={roadmap.title} onChange={e => setRoadmap({ ...roadmap, title: e.target.value })} className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none" />
+              <input value={roadmap.title} onChange={e => setRoadmap(prev => prev ? { ...prev, title: e.target.value } : prev)} className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none" />
               <Badge>{calcProgress(roadmap.topics)}%</Badge>
             </div>
-            <textarea value={roadmap.description} onChange={e => setRoadmap({ ...roadmap, description: e.target.value })} placeholder="Roadmap description" className="mt-2 w-full resize-none bg-transparent text-sm text-slate-500 outline-none" />
+            <textarea value={roadmap.description} onChange={e => setRoadmap(prev => prev ? { ...prev, description: e.target.value } : prev)} placeholder="Roadmap description" className="mt-2 w-full resize-none bg-transparent text-sm text-slate-500 outline-none" />
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <select value={roadmap.privacy} onChange={e => setRoadmap({ ...roadmap, privacy: e.target.value as Roadmap['privacy'] })} className="rounded-lg border border-[hsl(var(--line))] bg-transparent px-2 py-1 text-xs">
+              <select value={roadmap.privacy} onChange={e => setRoadmap(prev => prev ? { ...prev, privacy: e.target.value as Roadmap['privacy'] } : prev)} className="rounded-lg border border-[hsl(var(--line))] bg-transparent px-2 py-1 text-xs">
                 <option value="private">Private</option>
                 <option value="link">Anyone with link</option>
                 <option value="public">Public</option>
@@ -388,23 +388,23 @@ export function RoadmapTree() {
               <div className="mt-5 space-y-4">
                 <label className="block text-sm font-medium">
                   Title
-                  <input value={current.title} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, title: e.target.value } : t) })} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
+                  <input value={current.title} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, title: e.target.value } : t) } : prev)} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
                 </label>
 
                 <label className="block text-sm font-medium">
                   Description
-                  <textarea value={current.description} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, description: e.target.value } : t) })} className="mt-1 h-24 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent p-3" />
+                  <textarea value={current.description} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, description: e.target.value } : t) } : prev)} className="mt-1 h-24 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent p-3" />
                 </label>
 
                 <label className="block text-sm font-medium">
                   Notes / Markdown
-                  <textarea value={current.notes} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, notes: e.target.value } : t) })} className="mt-1 h-40 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent p-3" />
+                  <textarea value={current.notes} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, notes: e.target.value } : t) } : prev)} className="mt-1 h-40 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent p-3" />
                 </label>
 
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-sm font-medium">
                     Status
-                    <select value={current.status} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, status: e.target.value as Topic['status'], progress: e.target.value === 'completed' ? 100 : t.progress } : t) })} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2">
+                    <select value={current.status} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, status: e.target.value as Topic['status'], progress: e.target.value === 'completed' ? 100 : t.progress } : t) } : prev)} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2">
                       <option value="not_started">Not Started</option>
                       <option value="in_progress">In Progress</option>
                       <option value="completed">Completed</option>
@@ -413,13 +413,13 @@ export function RoadmapTree() {
 
                   <label className="text-sm font-medium">
                     Progress
-                    <input type="number" min="0" max="100" value={current.progress} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, progress: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : t) })} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
+                    <input type="number" min="0" max="100" value={current.progress} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, progress: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : t) } : prev)} className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
                   </label>
                 </div>
 
                 <label className="block text-sm font-medium">
                   Tags
-                  <input value={current.tags.join(', ')} onChange={e => setRoadmap({ ...roadmap, topics: roadmap.topics.map(t => t.id === current.id ? { ...t, tags: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } : t) })} placeholder="arrays, dsa, interview" className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
+                  <input value={current.tags.join(', ')} onChange={e => setRoadmap(prev => prev ? { ...prev, topics: prev.topics.map(t => t.id === current.id ? { ...t, tags: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } : t) } : prev)} placeholder="arrays, dsa, interview" className="mt-1 w-full rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2" />
                 </label>
 
                 <div className="flex flex-wrap gap-2">
