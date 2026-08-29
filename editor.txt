@@ -1,0 +1,343 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Background, Controls, Handle, MiniMap, Position, ReactFlow, ReactFlowProvider,
+  useReactFlow, type Edge, type Node, type NodeProps, type OnNodesChange, type OnConnect,
+} from 'reactflow';
+import 'reactflow/dist/style.css';
+import {
+  AlignLeft, ArrowDown, ArrowRight, Check, CircleDot, Copy, ExternalLink, FileText, Globe2,
+  GripVertical, Link2, List, Minus, MoreHorizontal, Network, Plus, Save, Search, Settings2,
+  Square, Trash2, Type, Users, X, Zap,
+} from 'lucide-react';
+import { Button, Badge, Card } from './ui';
+
+type Resource = { id: string; title: string; url: string; type: string; notes: string; completed: boolean; favorite: boolean };
+type Topic = {
+  id: string; roadmapId: string; parentId: string | null; title: string; description: string; notes: string;
+  status: 'not_started' | 'in_progress' | 'completed'; progress: number; priority: number; position: number;
+  tags: string[]; dueDate: string | null; resources: Resource[];
+};
+type Roadmap = { id: string; ownerId: string; title: string; description: string; privacy: 'private'|'link'|'public'; shareSlug: string; version: number; editorState?: EditorState; topics: Topic[] };
+type ElementKind = 'title'|'topic'|'subtopic'|'paragraph'|'button'|'legend'|'links-group'|'h-line'|'v-line'|'section';
+type EditorElement = {
+  id: string; kind: ElementKind; text: string; body?: string; url?: string; position: { x:number; y:number };
+  width?: number; height?: number; style?: 'default'|'highlight'|'muted';
+};
+type EditorState = { elements: EditorElement[]; topicPositions: Record<string,{x:number;y:number}> };
+
+type CanvasNode = Node<{
+  kind: 'topic'|'element'; topic?: Topic; element?: EditorElement; root?: boolean; onSelect: (id:string)=>void; onAddChild:(id:string)=>void;
+}>;
+
+const palette: Array<{kind: ElementKind; label:string; icon:any; description:string}> = [
+  { kind:'title', label:'Title', icon:Type, description:'Large roadmap heading' },
+  { kind:'topic', label:'Topic', icon:CircleDot, description:'Top-level learning node' },
+  { kind:'subtopic', label:'Sub Topic', icon:Network, description:'Child node in the roadmap' },
+  { kind:'paragraph', label:'Paragraph', icon:AlignLeft, description:'Notes or guidance block' },
+  { kind:'button', label:'Button', icon:Link2, description:'Clickable external link' },
+  { kind:'legend', label:'Legend', icon:List, description:'Explain colors and rules' },
+  { kind:'links-group', label:'Links Group', icon:Globe2, description:'Resource links card' },
+  { kind:'h-line', label:'Horizontal Line', icon:Minus, description:'Visual separator' },
+  { kind:'v-line', label:'Vertical Line', icon:ArrowDown, description:'Visual connector' },
+  { kind:'section', label:'Section', icon:Square, description:'Framed content region' },
+];
+
+function initialEditorState(): EditorState { return { elements: [], topicPositions: {} }; }
+
+function applyDefaults(state: EditorState, topics: Topic[]): EditorState {
+  const next: EditorState = { elements:[...(state.elements || [])], topicPositions:{...(state.topicPositions || {})} };
+  const children = new Map<string|null, Topic[]>();
+  for (const t of topics) {
+    const arr = children.get(t.parentId) || []; arr.push(t); children.set(t.parentId, arr);
+  }
+  for (const arr of children.values()) arr.sort((a,b)=>a.position-b.position);
+  const walk = (items: Topic[], parentX:number, startY:number) => {
+    let cursor = startY;
+    items.forEach((t, i) => {
+      if (!next.topicPositions[t.id]) next.topicPositions[t.id] = { x: parentX, y: cursor };
+      const kids = children.get(t.id) || [];
+      cursor += Math.max(145, kids.length * 78 + 45);
+      if (kids.length) walk(kids, parentX + 330, next.topicPositions[t.id].y - ((kids.length - 1) * 42));
+    });
+  };
+  walk(children.get(null) || [], 520, 100);
+  return next;
+}
+
+function TopicNode({ id, data }: NodeProps<CanvasNode['data']>) {
+  const topic = data.topic!;
+  const isRoot = data.root;
+  return (
+    <div className={`editor-topic-node ${isRoot ? 'is-root' : ''}`}>
+      <Handle type="target" position={Position.Left} className="editor-handle" />
+      <button className="editor-topic-main" onClick={() => data.onSelect(topic.id)}>
+        <span className="editor-topic-status"><Check size={11}/></span>
+        <span className="min-w-0 flex-1">
+          <span className="editor-topic-title">{topic.title}</span>
+          <span className="editor-topic-subtitle">{topic.description || (topic.resources?.length ? `${topic.resources.length} resources` : 'Add details, resources & notes')}</span>
+        </span>
+        <MoreHorizontal size={15}/>
+      </button>
+      <div className="editor-topic-progress"><span style={{width:`${Math.max(0,Math.min(100,topic.progress))}%`}}/></div>
+      <div className="editor-topic-actions">
+        <button onClick={() => data.onSelect(topic.id)}>Edit</button>
+        <button onClick={() => data.onAddChild(topic.id)}><Plus size={12}/> Child</button>
+      </div>
+      <Handle type="source" position={Position.Right} className="editor-handle" />
+    </div>
+  );
+}
+
+function ElementNode({ id, data }: NodeProps<CanvasNode['data']>) {
+  const e = data.element!;
+  if (e.kind === 'h-line') return <div className="editor-line-h"><Handle type="target" position={Position.Left}/><Handle type="source" position={Position.Right}/></div>;
+  if (e.kind === 'v-line') return <div className="editor-line-v"><Handle type="target" position={Position.Top}/><Handle type="source" position={Position.Bottom}/></div>;
+  const Icon = palette.find(x=>x.kind===e.kind)?.icon || FileText;
+  return (
+    <div className={`editor-element editor-element-${e.kind} ${e.style === 'highlight' ? 'is-highlight' : e.style === 'muted' ? 'is-muted' : ''}`}>
+      <button className="editor-element-body" onClick={() => data.onSelect(e.id)}>
+        <span className="editor-element-icon"><Icon size={14}/></span>
+        <span className="min-w-0 flex-1"><strong>{e.text || e.kind}</strong>{e.body && <small>{e.body}</small>}</span>
+      </button>
+    </div>
+  );
+}
+
+const nodeTypes = { topic: TopicNode, element: ElementNode };
+
+function StudioInner() {
+  const reactFlow = useReactFlow();
+  const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
+  const [roadmapList, setRoadmapList] = useState<Array<{id:string;title:string}>>([]);
+  const [state, setState] = useState<EditorState>(initialEditorState());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState('');
+  const [notice, setNotice] = useState('');
+  const [inspector, setInspector] = useState(true);
+  const [draggingKind, setDraggingKind] = useState<ElementKind | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  const flash = (text:string) => { setNotice(text); window.setTimeout(()=>setNotice(''), 1800); };
+  const draftKey = (id:string) => `roadmap:editor-draft:${id}`;
+
+  useEffect(() => {
+    if (!roadmap?.id || !dirty) return;
+    const payload = { roadmap: { title: roadmap.title, description: roadmap.description, privacy: roadmap.privacy, topics: roadmap.topics }, state, savedAt: Date.now() };
+    try { localStorage.setItem(draftKey(roadmap.id), JSON.stringify(payload)); } catch {}
+  }, [roadmap, state, dirty]);
+
+  const load = useCallback(async (id?: string) => {
+    setLoading(true);
+    try {
+      let roadmapId = id;
+      const list = await fetch('/api/roadmaps', { cache:'no-store' });
+      const listJson = list.ok ? await list.json() : { roadmaps: [] };
+      const nextList = (listJson.roadmaps || []).map((r:any)=>({id:r.id,title:r.title}));
+      setRoadmapList(nextList);
+      if (!roadmapId) {
+        const qp = new URLSearchParams(window.location.search).get('roadmapId');
+        roadmapId = qp || nextList[0]?.id;
+      }
+      if (!roadmapId) { setRoadmap(null); return; }
+      const res = await fetch(`/api/roadmaps/${roadmapId}`, { cache:'no-store' });
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+      const nextRoadmap = json.roadmap as Roadmap;
+      let draft:any = null;
+      try { const raw = localStorage.getItem(draftKey(nextRoadmap.id)); draft = raw ? JSON.parse(raw) : null; } catch {}
+      const draftIsNewer = !!draft?.savedAt && Date.now() - Number(draft.savedAt) < 7 * 24 * 60 * 60 * 1000;
+      const baseRoadmap = draftIsNewer && draft.roadmap ? { ...nextRoadmap, ...draft.roadmap, topics: nextRoadmap.topics.map((serverTopic:any) => draft.roadmap.topics?.find((x:any)=>x.id===serverTopic.id) || serverTopic) } : nextRoadmap;
+      const prepared = applyDefaults(draftIsNewer && draft.state ? draft.state : (baseRoadmap.editorState || initialEditorState()), baseRoadmap.topics || []);
+      setRoadmap(baseRoadmap); setState(prepared); setDirty(draftIsNewer);
+      if (draftIsNewer) flash('Recovered local changes');
+      setSelectedId((prev)=>prev && (nextRoadmap.topics.some(t=>t.id===prev)||prepared.elements.some(e=>e.id===prev)) ? prev : nextRoadmap.topics[0]?.id || prepared.elements[0]?.id || null);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(()=>{ void load(); }, [load]);
+  useEffect(()=>{
+    const listener=()=>{ if (!dirty) void load(roadmap?.id); };
+    window.addEventListener('app:sync', listener);
+    return ()=>window.removeEventListener('app:sync', listener);
+  }, [load, roadmap?.id, dirty]);
+
+  const filteredTopics = useMemo(() => {
+    const q=search.trim().toLowerCase();
+    if(!q) return roadmap?.topics || [];
+    return (roadmap?.topics || []).filter(t => `${t.title} ${t.description} ${t.tags.join(' ')}`.toLowerCase().includes(q));
+  }, [roadmap, search]);
+
+  const nodes = useMemo<CanvasNode[]>(()=>{
+    if(!roadmap) return [];
+    const next:any[]=[];
+    const allVisible=new Set(filteredTopics.map(t=>t.id));
+    for(const t of filteredTopics){
+      const pos=state.topicPositions[t.id] || {x:500,y:100};
+      next.push({ id:t.id, type:'topic', position:pos, data:{topic:t,root:!t.parentId,onSelect:setSelectedId,onAddChild:(parentId:string)=>void addTopic(parentId)} });
+    }
+    for(const e of state.elements || []){
+      next.push({ id:e.id, type:'element', position:e.position, draggable:true, data:{element:e,onSelect:setSelectedId,onAddChild:(id:string)=>void addTopic(id)} });
+    }
+    return next;
+  }, [roadmap, state.topicPositions, state.elements, filteredTopics]);
+
+  const edges = useMemo<Edge[]>(()=>{
+    if(!roadmap) return [];
+    return roadmap.topics.filter(t=>t.parentId && filteredTopics.some(x=>x.id===t.parentId) && filteredTopics.some(x=>x.id===t.id)).map(t=>({
+      id:`${t.parentId}-${t.id}`, source:t.parentId!, target:t.id, type:'smoothstep', style:{stroke:'hsl(218 84% 64%)',strokeWidth:2}, animated:t.status==='in_progress'
+    }));
+  }, [roadmap, filteredTopics]);
+
+  async function createRoadmap() {
+    const name = window.prompt('Roadmap name', 'My Roadmap');
+    if(!name?.trim()) return;
+    const res=await fetch('/api/roadmaps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:name.trim(),privacy:'private'})});
+    if(!res.ok) return flash(await res.text());
+    const j=await res.json(); await load(j.roadmap.id); window.history.replaceState(null,'',`/roadmap?roadmapId=${j.roadmap.id}`); flash('Roadmap created');
+  }
+
+  async function addTopic(parentId:string|null, fromKind:ElementKind='topic') {
+    if(!roadmap) return;
+    const name=window.prompt(parentId ? 'Sub topic name' : 'Topic name', parentId ? 'New sub topic' : 'New topic');
+    if(!name?.trim()) return;
+    const res=await fetch('/api/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roadmapId:roadmap.id,parentId,title:name.trim()})});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok) return flash(j?.error || 'Could not add topic');
+    if (j.queuedOffline) { flash('Topic creation queued · reconnect to sync'); return; }
+    setRoadmap(prev=>prev?{...prev,topics:[...prev.topics,j.topic]}:prev); setDirty(true);
+    setState(prev=>applyDefaults(prev,[...(roadmap?.topics||[]),j.topic])); setSelectedId(j.topic.id); flash(fromKind==='subtopic'?'Sub topic added':'Topic added');
+  }
+
+  function addElement(kind:ElementKind, point?:{x:number;y:number}) {
+    if(kind==='topic') return void addTopic(null,kind);
+    if(kind==='subtopic') {
+      const selectedTopic=roadmap?.topics.find(t=>t.id===selectedId);
+      return void addTopic(selectedTopic?.id || null,kind);
+    }
+    const defaults:Record<ElementKind,Partial<EditorElement>>={
+      title:{text:'Frontend',body:'A roadmap section'}, paragraph:{text:'Guidance',body:'Write a short explanation for learners.'}, button:{text:'Visit resource',url:'https://example.com'}, legend:{text:'Legend',body:'Purple = recommendation · Green = alternative · Grey = optional'}, 'links-group':{text:'Useful links',body:'Documentation\nTutorial\nGitHub'}, 'h-line':{text:''}, 'v-line':{text:''}, section:{text:'Section',body:'Drop topics and notes into this area'}, topic:{}, subtopic:{},
+    };
+    const e:EditorElement={id:`element-${crypto.randomUUID()}`,kind,text:defaults[kind].text || '',body:defaults[kind].body,url:defaults[kind].url,position:point||{x:120,y:120+(state.elements.length*70)%420},width:kind==='h-line'?420:kind==='v-line'?6:250,height:kind==='v-line'?250:undefined,style:kind==='title'||kind==='section'?'highlight':'default'};
+    setState(prev=>({...prev,elements:[...prev.elements,e]})); setDirty(true); setSelectedId(e.id);
+  }
+
+  function updateElement(id:string, data:Partial<EditorElement>) {
+    setState(prev=>({...prev,elements:prev.elements.map(e=>e.id===id?{...e,...data}:e)})); setDirty(true);
+  }
+  function updateTopicLocal(id:string,data:Partial<Topic>){setDirty(true);setRoadmap(prev=>prev?{...prev,topics:prev.topics.map(t=>t.id===id?{...t,...data}:t)}:prev);}
+
+  async function save() {
+    if(!roadmap) return;
+    setSaving(true);
+    try {
+      const prepared={...state,topicPositions:state.topicPositions};
+        const res=await fetch(`/api/roadmaps/${roadmap.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:roadmap.title,description:roadmap.description,privacy:roadmap.privacy,editorState:prepared})});
+      const j=await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(j?.error || await res.text());
+      if (j.queuedOffline) { flash('Saved locally · will sync when online'); setDirty(false); return; }
+      setRoadmap(prev=>prev?{...prev,...j.roadmap}:prev); setDirty(false);
+      try { localStorage.removeItem(draftKey(roadmap.id)); } catch {}
+      flash('Saved');
+    } catch(e){ flash(e instanceof Error?e.message:'Save failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function saveTopic(topic:Topic){
+    const res=await fetch(`/api/topics/${topic.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:topic.title,description:topic.description,notes:topic.notes,status:topic.status,progress:topic.progress,priority:topic.priority,tags:topic.tags,dueDate:topic.dueDate})});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok)return flash(j?.error || 'Topic save failed');
+    if (j.queuedOffline) { setDirty(true); flash('Topic saved locally · will sync when online'); return; }
+    setRoadmap(prev=>prev?{...prev,topics:prev.topics.map(t=>t.id===topic.id?{...t,...j.topic}:t)}:prev); flash('Topic saved');
+  }
+  async function deleteSelected(){
+    if(!roadmap||!selectedId)return;
+    const topic=roadmap.topics.find(t=>t.id===selectedId);
+    if(topic){if(!confirm(`Delete “${topic.title}” and its children?`))return;const res=await fetch(`/api/topics/${topic.id}`,{method:'DELETE'});if(!res.ok)return flash(await res.text());setRoadmap(prev=>prev?{...prev,topics:prev.topics.filter(t=>t.id!==topic.id&&!isDescendant(t,topic.id,prev.topics))}:prev);setSelectedId(null);flash('Topic deleted');return;}
+    setState(prev=>({...prev,elements:prev.elements.filter(e=>e.id!==selectedId)})); setDirty(true); setSelectedId(null); flash('Element removed');
+  }
+  function isDescendant(t:Topic, rootId:string, topics:Topic[]){let cur=t.parentId;let guard=0;while(cur&&guard++<2000){if(cur===rootId)return true;cur=topics.find(x=>x.id===cur)?.parentId||null;}return false;}
+
+  const onNodesChange:OnNodesChange=(changes)=>{
+    setState(prev=>{
+      const positions={...prev.topicPositions}; const elements=prev.elements.map(e=>({...e}));
+      for(const c of changes){if(c.type==='position'&&c.position){if(roadmap?.topics.some(t=>t.id===c.id))positions[c.id]=c.position;else{const idx=elements.findIndex(e=>e.id===c.id);if(idx>=0)elements[idx]={...elements[idx],position:c.position};}}}
+      setDirty(true); return {...prev,topicPositions:positions,elements};
+    });
+  };
+  const onConnect:OnConnect=()=>{};
+
+  const onDrop=(event:React.DragEvent)=>{
+    event.preventDefault();
+    const kind=event.dataTransfer.getData('application/roadmap-kind') as ElementKind;
+    if(!kind) return;
+    const point=reactFlow.project({x:event.clientX,y:event.clientY});
+    setDraggingKind(null); addElement(kind,point);
+  };
+
+  const selectedTopic=roadmap?.topics.find(t=>t.id===selectedId);
+  const selectedElement=state.elements.find(e=>e.id===selectedId);
+
+  if(loading) return <Card className="p-8"><div className="flex items-center justify-center gap-3 text-sm text-slate-500"><span className="studio-spinner"/>Loading roadmap editor…</div></Card>;
+  if(!roadmap) return <Card className="p-12 text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-indigo-50 text-indigo-600"><GitBranchIcon/></div><h2 className="mt-4 text-xl font-semibold">Create your first roadmap</h2><p className="mt-2 text-sm text-slate-500">Build a visual roadmap with nodes, notes, sections, links and learning resources.</p><Button className="mt-5" onClick={createRoadmap}><Plus size={15}/> Create roadmap</Button></Card>;
+
+  return <div className="studio-shell">
+    <div className="studio-header">
+      <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><select value={roadmap.id} onChange={e=>{window.history.replaceState(null,'',`/roadmap?roadmapId=${e.target.value}`);void load(e.target.value)}} className="max-w-56 rounded-lg border border-[hsl(var(--line))] bg-transparent px-2 py-1.5 text-[11px] font-semibold">{roadmapList.map(r=><option key={r.id} value={r.id}>{r.title}</option>)}</select><input value={roadmap.title} onChange={e=>{setRoadmap({...roadmap,title:e.target.value});setDirty(true)}} className="studio-title-input"/><select value={roadmap.privacy} onChange={e=>{setRoadmap({...roadmap,privacy:e.target.value as Roadmap['privacy']});setDirty(true)}} className="rounded-lg border border-[hsl(var(--line))] bg-transparent px-2 py-1.5 text-[10px] font-semibold"><option value="private">Private</option><option value="link">Link access</option><option value="public">Public</option></select></div><input value={roadmap.description} onChange={e=>{setRoadmap({...roadmap,description:e.target.value});setDirty(true)}} placeholder="Add a roadmap description" className="studio-description-input"/></div>
+      <div className="flex flex-wrap items-center gap-2"><a href={roadmap.privacy==='private'?undefined:`/share/${roadmap.shareSlug}`} target="_blank" className={`studio-header-link ${roadmap.privacy==='private'?'opacity-50 pointer-events-none':''}`}><ExternalLink size={14}/> Preview</a><Button variant="outline" onClick={createRoadmap}><Plus size={15}/> New</Button><Button onClick={save} disabled={saving || !dirty}>{saving?<span className="studio-spinner"/>:<Save size={15}/>} {saving?'Saving…':'Save'}</Button></div>
+    </div>
+    <div className="studio-layout">
+      <aside className="studio-palette">
+        <div className="studio-palette-head"><div><div className="text-sm font-semibold">Components</div><p className="text-[11px] text-slate-400">Drag to canvas</p></div><Zap size={17} className="text-indigo-500"/></div>
+        <div className="studio-palette-list">
+          {palette.map(item=>{const Icon=item.icon;return <button key={item.kind} draggable onDragStart={e=>{e.dataTransfer.setData('application/roadmap-kind',item.kind);setDraggingKind(item.kind)}} onDragEnd={()=>setDraggingKind(null)} onClick={()=>addElement(item.kind)} className={`studio-palette-item ${draggingKind===item.kind?'dragging':''}`}><span className="studio-palette-icon"><Icon size={16}/></span><span><strong>{item.label}</strong><small>{item.description}</small></span><GripVertical size={14} className="ml-auto text-slate-300"/></button>})}
+        </div>
+        <div className="studio-palette-footer"><div className="text-[10px] font-semibold uppercase tracking-[.18em] text-slate-400">Editor tips</div><p>Use <b>Topic</b> for primary nodes, <b>Sub Topic</b> for hierarchy, and the visual blocks for guides and callouts.</p></div>
+      </aside>
+
+      <section className="studio-canvas-pane">
+        <div className="studio-canvas-toolbar"><div className="studio-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Find topics, resources, tags…"/>{search&&<button onClick={()=>setSearch('')}><X size={13}/></button>}</div><div className="flex items-center gap-1"><button className="studio-tool"><MoreHorizontal size={16}/></button><button className="studio-tool" onClick={()=>setInspector(!inspector)}><Settings2 size={16}/></button></div></div>
+        <div className="studio-canvas" onDrop={onDrop} onDragOver={e=>e.preventDefault()}>
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onConnect={onConnect} fitView fitViewOptions={{padding:.14}} minZoom={.2} maxZoom={2} nodesConnectable={false} deleteKeyCode={null} onNodeClick={(_,n)=>setSelectedId(n.id)} proOptions={{hideAttribution:true}}>
+            <Background gap={20} size={1} color="hsl(220 20% 90%)"/>
+            <Controls showInteractive={false}/><MiniMap pannable zoomable nodeColor={n=>roadmap.topics.some(t=>t.id===n.id)?'#facc15':'#94a3b8'}/>
+          </ReactFlow>
+          {!nodes.length && <div className="studio-empty-overlay"><div className="studio-empty-icon"><Network size={24}/></div><h3>Start designing your roadmap</h3><p>Drag Topic or Sub Topic from the left, then connect your learning path visually.</p></div>}
+        </div>
+        <div className="studio-statusbar"><span>{roadmap.topics.length} topics · {state.elements.length} visual blocks</span><span>{notice || (dirty ? 'Unsaved changes' : 'Drag nodes to arrange the canvas')}</span></div>
+      </section>
+
+      {inspector && <aside className="studio-inspector">
+        <div className="studio-inspector-head"><div><div className="text-sm font-semibold">Inspector</div><p className="text-[11px] text-slate-400">Edit the selected item</p></div><button className="studio-tool" onClick={()=>setInspector(false)}><X size={15}/></button></div>
+        {!selectedTopic && !selectedElement ? <div className="studio-inspector-empty"><Settings2 size={22}/><p>Select a topic or visual block.</p></div> : selectedTopic ? <div className="studio-inspector-body">
+          <div className="studio-section-label">TOPIC</div>
+          <label className="studio-field">Title<input value={selectedTopic.title} onChange={e=>updateTopicLocal(selectedTopic.id,{title:e.target.value})}/></label>
+          <label className="studio-field">Description<textarea value={selectedTopic.description} onChange={e=>updateTopicLocal(selectedTopic.id,{description:e.target.value})}/></label>
+          <label className="studio-field">Notes / Markdown<textarea className="h-28" value={selectedTopic.notes} onChange={e=>updateTopicLocal(selectedTopic.id,{notes:e.target.value})}/></label>
+          <div className="grid grid-cols-2 gap-2"><label className="studio-field">Status<select value={selectedTopic.status} onChange={e=>updateTopicLocal(selectedTopic.id,{status:e.target.value as Topic['status'],progress:e.target.value==='completed'?100:selectedTopic.progress})}><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label><label className="studio-field">Progress<input type="number" min="0" max="100" value={selectedTopic.progress} onChange={e=>updateTopicLocal(selectedTopic.id,{progress:Math.max(0,Math.min(100,Number(e.target.value)||0))})}/></label></div>
+          <label className="studio-field">Tags<input value={selectedTopic.tags.join(', ')} onChange={e=>updateTopicLocal(selectedTopic.id,{tags:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})}/></label>
+          <div className="grid grid-cols-2 gap-2"><Button onClick={()=>saveTopic(selectedTopic)}><Save size={14}/> Save topic</Button><Button variant="outline" onClick={()=>addTopic(selectedTopic.id,'subtopic')}><Plus size={14}/> Child</Button></div>
+          <div className="studio-inspector-divider"/>
+          <div className="flex items-center justify-between"><div className="studio-section-label mb-0">RESOURCES</div><Button variant="outline" onClick={()=>{const title=prompt('Resource title');const url=prompt('Resource URL');if(title&&url){fetch('/api/resources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topicId:selectedTopic.id,title,url,type:'other'})}).then(r=>r.json()).then(j=>{if(j.resource){setRoadmap(prev=>prev?{...prev,topics:prev.topics.map(t=>t.id===selectedTopic.id?{...t,resources:[...t.resources,j.resource]}:t)}:prev);flash('Resource added')}})}}}><Plus size={13}/> Add</Button></div>
+          <div className="mt-2 space-y-2">{selectedTopic.resources.slice(0,6).map(r=><a key={r.id} href={r.url} target="_blank" className="studio-resource"><span className="studio-resource-icon"><Link2 size={13}/></span><span className="min-w-0"><strong>{r.title}</strong><small>{r.type}</small></span><ExternalLink size={12}/></a>)}{selectedTopic.resources.length===0&&<p className="text-xs text-slate-400">No resources yet.</p>}</div>
+          <div className="studio-inspector-divider"/><button onClick={deleteSelected} className="studio-danger"><Trash2 size={14}/> Delete topic</button>
+        </div> : <div className="studio-inspector-body">
+          <div className="studio-section-label">{selectedElement?.kind.toUpperCase()}</div>
+          <label className="studio-field">Text<input value={selectedElement?.text||''} onChange={e=>selectedElement&&updateElement(selectedElement.id,{text:e.target.value})}/></label>
+          <label className="studio-field">Body<textarea value={selectedElement?.body||''} onChange={e=>selectedElement&&updateElement(selectedElement.id,{body:e.target.value})}/></label>
+          {selectedElement?.kind==='button'&&<label className="studio-field">URL<input value={selectedElement.url||''} onChange={e=>updateElement(selectedElement.id,{url:e.target.value})}/></label>}
+          {(selectedElement?.kind==='title'||selectedElement?.kind==='section'||selectedElement?.kind==='paragraph'||selectedElement?.kind==='legend'||selectedElement?.kind==='links-group')&&<label className="studio-field">Style<select value={selectedElement.style||'default'} onChange={e=>updateElement(selectedElement.id,{style:e.target.value as EditorElement['style']})}><option value="default">Default</option><option value="highlight">Highlight</option><option value="muted">Muted</option></select></label>}
+          <div className="grid grid-cols-2 gap-2"><Button variant="outline" onClick={()=>{if(!selectedElement)return;setState(prev=>({...prev,elements:[...prev.elements,{...selectedElement,id:`element-${crypto.randomUUID()}`,position:{x:selectedElement.position.x+35,y:selectedElement.position.y+35}}]})); setDirty(true)}}><Copy size={14}/> Duplicate</Button><Button onClick={save}><Save size={14}/> Save canvas</Button></div>
+          <div className="studio-inspector-divider"/><button onClick={deleteSelected} className="studio-danger"><Trash2 size={14}/> Delete element</button>
+        </div>}
+      </aside>}
+    </div>
+  </div>;
+}
+
+function GitBranchIcon(){return <Network size={25}/>;}
+
+export function RoadmapEditor(){ return <ReactFlowProvider><StudioInner/></ReactFlowProvider>; }

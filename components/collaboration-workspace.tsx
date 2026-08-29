@@ -1,0 +1,323 @@
+'use client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useGetJsonQuery, useLazyGetJsonQuery, useRequestMutation } from '@/lib/redux/api';
+import { AppShell } from '@/components/app-shell';
+import { Card, Button, Badge } from '@/components/ui';
+import { Check, X, RefreshCw, Users, UserPlus, Crown, Settings2, LogOut, ExternalLink, Plus, Globe2 } from 'lucide-react';
+import { RoadmapTree } from '@/components/roadmap-tree';
+import { GroupChat } from '@/components/group-chat';
+
+type Branch = { id: string; name: string; ownerId: string; rootTopicId: string|null; baseVersion: number; version: number; status: string; updatedAt: string };
+type Commit = { id: string; authorId: string; message: string; baseVersion: number; status: string; createdAt: string; branch: { id: string; name: string; ownerId: string; rootTopicId: string|null; baseVersion: number } };
+type Group = { id: string; roadmapId: string; ownerId: string; name: string; description: string; maxMembers: number; discoverable: boolean; settings?: {kind?: 'team'|'community'; cohort?: string; accessMode?: 'invite'|'request'|'open'} };
+type GroupMember = { id: string; groupId: string; userId: string; role: string; createdAt: string };
+type GroupRequest = { id: string; groupId: string; requesterId: string; message: string; status: string; createdAt: string };
+type GroupState = { group: Group|null; isOwner: boolean; membership: GroupMember|null; memberCount?: number; members: GroupMember[]; pendingRequests: GroupRequest[]; roadmapTitle?: string; privacy?: string; groupSettings?: {kind?:'team'|'community';cohort?:string;accessMode?:'invite'|'request'|'open';directCollaboration?:boolean}; inviteLink?: string; directCollaboration?: boolean };
+
+export function CollaborationWorkspace({ roadmapId, createKind }: { roadmapId: string; createKind?: 'team' | 'community' }) {
+  const [selectedBranch,setSelectedBranch]=useState<string|null>(null);
+  const [name,setName]=useState('');
+  const [notice,setNotice]=useState('');
+  const [groupName,setGroupName]=useState('Roadmap Community');
+  const [groupDescription,setGroupDescription]=useState('A community working together on this roadmap.');
+  const [groupLimit,setGroupLimit]=useState(10);
+  const [groupDiscoverable,setGroupDiscoverable]=useState(true);
+  const [groupCohort,setGroupCohort]=useState('');
+  const [groupAccessMode,setGroupAccessMode]=useState<'invite'|'request'|'open'>('invite');
+  const [memberSearch,setMemberSearch]=useState('');
+  const [selectedInvitees,setSelectedInvitees]=useState<string[]>([]);
+  const [inviteRole,setInviteRole]=useState<'viewer'|'contributor'|'editor'>('contributor');
+  const [requestMessage,setRequestMessage]=useState('I would like to join this roadmap community.');
+  const [creatingGroup,setCreatingGroup]=useState(false);
+  const groupFormDirtyRef=useRef(false);
+
+  const branchesQuery = useGetJsonQuery(
+    { url:`/api/collab/${roadmapId}/branches`, tag:`branches:${roadmapId}` },
+    { pollingInterval:15000 }
+  );
+  const groupQuery = useGetJsonQuery(
+    { url:`/api/collab/${roadmapId}/group`, tag:`group:${roadmapId}` },
+    { pollingInterval:30000 }
+  );
+  const [searchUsers, searchUsersState] = useLazyGetJsonQuery();
+  const [request] = useRequestMutation();
+
+  const branchesData = (branchesQuery.data as any)?.branches ?? [];
+  const commits = ((branchesQuery.data as any)?.commits ?? []) as Commit[];
+  const role = (branchesQuery.data as any)?.role ?? 'none';
+  const loading = branchesQuery.isLoading;
+  const group = (groupQuery.data as GroupState | undefined) ?? null;
+  const groupLoading = groupQuery.isLoading;
+
+  const markGroupFormDirty = useCallback((dirty = true) => {
+    groupFormDirtyRef.current = dirty;
+  }, []);
+
+  useEffect(() => {
+    if (!group?.group || groupFormDirtyRef.current) return;
+    setGroupName(group.group.name);
+    setGroupDescription(group.group.description);
+    setGroupLimit(group.group.maxMembers);
+    setGroupDiscoverable(group.group.discoverable);
+    setGroupCohort(String(group.group.settings?.cohort || group.groupSettings?.cohort || ''));
+    setGroupAccessMode((group.group.settings?.accessMode || group.groupSettings?.accessMode || 'invite') as 'invite'|'request'|'open');
+  }, [group]);
+
+  useEffect(() => {
+    setSelectedBranch(prev =>
+      prev && branchesData.some((b: Branch) => b.id === prev)
+        ? prev
+        : (branchesData[0]?.id ?? null)
+    );
+  }, [branchesData]);
+
+  useEffect(() => {
+    const q = memberSearch.trim();
+    if (q.length < 2) {
+      setMemberSearch(q);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void searchUsers({
+        url:`/api/users/search?q=${encodeURIComponent(q)}`,
+        tag:`users:${q.toLowerCase()}`,
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [memberSearch, searchUsers]);
+
+  const memberResults = (((searchUsersState.data as any)?.users || []) as Array<{id:string;email:string;fullName:string}>);
+
+  async function createBranch(){
+    const n=name.trim()||`feature/${new Date().toISOString().slice(0,10)}`;
+    const result=await request({url:`/api/collab/${roadmapId}/branches`,method:'POST',body:{name:n},invalidate:[`branches:${roadmapId}`]});
+    if((result as any).error)return alert(apiError((result as any).error));
+    setName('');
+    const created=(result as any).data?.branch;
+    setSelectedBranch(created?.id ?? null);
+  }
+  async function merge(id:string){
+    const result=await request({url:`/api/collab/${roadmapId}/commits/${id}/merge`,method:'POST',invalidate:[`branches:${roadmapId}`,`group:${roadmapId}`,`roadmaps`,`notifications`]});
+    if((result as any).error){
+      const status=(result as any).error?.status;
+      if(status===409){alert('Merge conflict: the main roadmap changed after this branch started. Create a fresh branch from the latest main version.');return}
+      return alert(apiError((result as any).error));
+    }
+    setNotice('Commit merged into the leader roadmap.');
+  }
+  async function reject(id:string){
+    const result=await request({url:`/api/collab/${roadmapId}/commits/${id}/reject`,method:'POST',invalidate:[`branches:${roadmapId}`]});
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice('Commit rejected.');
+  }
+
+  async function createGroup(){
+    setCreatingGroup(true);
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group`,
+      method:'POST',
+      body:{name:groupName,description:groupDescription,maxMembers:groupLimit,discoverable:groupDiscoverable,settings:{kind:createKind||'community',cohort:groupCohort,accessMode:groupAccessMode}},
+      invalidate:[`group:${roadmapId}`,`communities`,`notifications`],
+    });
+    setCreatingGroup(false);
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice(`${groupKind === 'team' ? 'Friends team' : 'Community'} created. You are the owner and leader.`);
+    markGroupFormDirty(false);
+  }
+  async function updateGroup(){
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group`,
+      method:'PATCH',
+      body:{name:groupName,description:groupDescription,maxMembers:groupLimit,discoverable:groupDiscoverable,settings:{cohort:groupCohort,accessMode:groupAccessMode}},
+      invalidate:[`group:${roadmapId}`,`communities`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice(`${groupKind === 'team' ? 'Team' : 'Community'} settings updated.`);
+    markGroupFormDirty(false);
+  }
+  async function requestJoin(){
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group/request`,
+      method:'POST',
+      body:{message:requestMessage},
+      invalidate:[`group:${roadmapId}`,`communities`,`notifications`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice(`Join request sent. ${groupKind === 'community' ? 'The community owner controls collaboration access.' : 'Any team member can approve it.'}`);
+  }
+  async function reviewRequest(requestId:string, action:'accept'|'reject'){
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group/requests`,
+      method:'PATCH',
+      body:{requestId,action},
+      invalidate:[`group:${roadmapId}`,`communities`,`notifications`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice(action==='accept'?'Member accepted.':'Join request rejected.');
+  }
+
+  async function updateMemberRole(userId:string, role:'viewer'|'contributor'|'editor'){
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group/members`,
+      method:'PATCH',
+      body:{userId,role},
+      invalidate:[`group:${roadmapId}`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice('Member access updated.');
+  }
+
+  async function inviteSelected(){
+    if(!selectedInvitees.length) return;
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group/invite`,
+      method:'POST',
+      body:{userIds:selectedInvitees,role:inviteRole},
+      invalidate:[`group:${roadmapId}`,`notifications`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setSelectedInvitees([]);
+    setMemberSearch('');
+    setNotice('Selected people were added to the group.');
+  }
+
+  async function removeMember(userId:string){
+    const result=await request({
+      url:`/api/collab/${roadmapId}/group/members`,
+      method:'DELETE',
+      body:{userId},
+      invalidate:[`group:${roadmapId}`,`communities`,`notifications`],
+    });
+    if((result as any).error)return alert(apiError((result as any).error));
+    setNotice('Member removed from the community.');
+  }
+
+  const branches = branchesData as Branch[];
+
+  function apiError(error:any){
+    const data=error?.data;
+    return typeof data==='string' ? data : data?.error || data?.message || 'Request failed';
+  }
+
+  const isMember=!!group?.membership;
+  const isOwner=!!group?.isOwner;
+  const groupKind = group?.groupSettings?.kind || group?.group?.settings?.kind || (createKind === 'community' ? 'community' : 'team');
+  const canManageGroupRequests=isOwner || (isMember && groupKind === 'team');
+  const canInviteMembers=isOwner || (isMember && groupKind === 'team');
+  const groupFull=!!group?.group && (group.memberCount ?? 0) >= group.group.maxMembers;
+  // Community/team members with edit-capable access collaborate directly on the shared roadmap.
+  // Branches, commits and pull-request style workflows are intentionally not used here.
+  const directGroupCollab = !!group?.membership && group.membership.role !== 'viewer';
+
+  return <AppShell>
+    <header className="mb-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><h1 className="text-3xl font-bold">Collaboration</h1><Badge>{role==='owner'?'Leader':role}</Badge></div><p className="mt-1 max-w-3xl text-slate-500">One roadmap, one identity. Open the same visual editor, manage permissions, build your team/community, and collaborate directly on the same roadmap with your team or community.</p></div><div className="flex items-center gap-2"><a href={`/roadmap/${roadmapId}`} className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--bg))]"><ExternalLink size={14}/> Open shared editor</a><a href={`/roadmap/${roadmapId}/live`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--bg))]"><Globe2 size={14}/> Live view</a></div></div></header>
+    {notice && <div className="mb-4 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</div>}
+
+    <div className="mb-5" id="community">
+      <Card className="p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3"><div className="rounded-xl bg-indigo-100 p-2 text-indigo-600 dark:bg-indigo-950/40"><Users size={20}/></div><div><h2 className="font-semibold">{groupKind === 'team' ? 'Friends Team' : 'Public Community'}</h2><p className="text-xs text-slate-500">{groupKind === 'team' ? 'A private group of friends with direct shared-roadmap editing and group chat.' : 'A public community around this roadmap. Everyone can discover and view the roadmap; collaborative access is granted separately by the owner.'} The leader controls membership capacity.</p></div></div>
+          {group?.group && <Badge>{group.memberCount ?? 0}/{group.group.maxMembers} members</Badge>}
+        </div>
+
+        {groupLoading ? <p className="mt-4 text-sm text-slate-500">Loading community…</p> : !group?.group ? (
+          isOwner ? <div className="mt-5 grid gap-3 lg:grid-cols-6"><input value={groupName} onChange={e=>{setGroupName(e.target.value);markGroupFormDirty()}} placeholder={createKind === 'team' ? 'Team name' : 'Community name'} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm lg:col-span-2"/><input value={groupDescription} onChange={e=>{setGroupDescription(e.target.value);markGroupFormDirty()}} placeholder="Description" className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm lg:col-span-2"/><input value={groupCohort} onChange={e=>{setGroupCohort(e.target.value);markGroupFormDirty()}} placeholder="Configuration, e.g. 10th Boys" className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm lg:col-span-2"/><select value={groupAccessMode} onChange={e=>{setGroupAccessMode(e.target.value as any);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"><option value="invite">Invite only</option><option value="request">Join requests</option><option value="open">Open access</option></select><input type="number" min={2} max={100} value={groupLimit} onChange={e=>{setGroupLimit(Number(e.target.value)||10);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"/><Button disabled={creatingGroup} onClick={createGroup} className="lg:col-span-2">{creatingGroup?'Creating…':`Create ${createKind === 'team' ? 'team' : 'community'}`}</Button></div>
+          : <div className="mt-4 text-sm text-slate-500">This roadmap does not have a {createKind === 'team' ? 'team' : 'community'} yet.</div>
+        ) : (
+          <div className="mt-5 space-y-5">
+            <div className="grid gap-3 lg:grid-cols-[1.3fr_.7fr]">
+              <div><div className="text-lg font-semibold">{group.group.name}</div><p className="mt-1 text-sm text-slate-500">{group.group.description || 'No description.'}</p></div>
+              <div className="rounded-xl border border-[hsl(var(--line))] p-3 text-sm"><div className="flex items-center gap-2"><Crown size={15}/><span className="font-medium">Leader</span></div><div className="mt-1 break-all text-xs text-slate-500">{group.group.ownerId}</div></div>
+            </div>
+            <div className="flex flex-wrap gap-2 rounded-xl border border-[hsl(var(--line))] bg-slate-50 p-3 dark:bg-slate-900">
+              <a href={`/roadmap/${roadmapId}`} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"><ExternalLink size={14}/> Open roadmap editor</a>
+              <a href={`/collaborate/create?type=${groupKind}&fromGroup=${group.group.id}`} className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold"><Plus size={14}/> Create roadmap</a>
+              {canInviteMembers && <button onClick={()=>document.getElementById('group-invite')?.scrollIntoView({behavior:'smooth',block:'center'})} className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold"><UserPlus size={14}/> Invite members</button>}
+              <a href="#group-chat" className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold"><Users size={14}/> Group chat</a>
+            </div>
+
+            {isOwner ? <div className="rounded-xl border border-[hsl(var(--line))] p-4">
+              <div className="mb-3 flex items-center gap-2 font-medium"><Settings2 size={16}/> Community settings</div>
+              <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1.2fr_150px_100px_auto]">
+                <input value={groupName} onChange={e=>{setGroupName(e.target.value);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm" placeholder="Name"/>
+                <input value={groupDescription} onChange={e=>{setGroupDescription(e.target.value);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm" placeholder={createKind === 'team' ? 'Team description' : 'Community description'}/>
+                <input value={groupCohort} onChange={e=>{setGroupCohort(e.target.value);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm" placeholder="Configuration / cohort"/>
+                <select value={groupAccessMode} onChange={e=>{setGroupAccessMode(e.target.value as any);markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"><option value="invite">Invite</option><option value="request">Request</option><option value="open">Open</option></select>
+                <input type="number" min={2} max={100} value={groupLimit} onChange={e=>{setGroupLimit(Math.max(2, Math.min(100, Number(e.target.value)||10)));markGroupFormDirty()}} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm" title="Maximum members"/>
+                <Button onClick={updateGroup}>Save</Button>
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={groupDiscoverable} onChange={e=>{setGroupDiscoverable(e.target.checked);markGroupFormDirty()}}/><span>Allow authenticated users to request to join</span></label>
+              <p className="mt-2 text-xs text-slate-500">Capacity includes the leader. Default is 10 and only the leader can change it.</p><div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Community ID:</span><code className="rounded-lg bg-slate-100 px-2 py-1 dark:bg-slate-900">{group.group.id}</code><Button variant="ghost" onClick={()=>navigator.clipboard.writeText(group.group!.id)}>Copy ID</Button>{group.inviteLink && <Button variant="ghost" onClick={()=>navigator.clipboard.writeText(`${location.origin}${group.inviteLink}`)}>Copy invite link</Button>}<span className={`rounded-full px-2 py-1 font-medium ${groupKind === 'team' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300'}`}>{groupKind === 'team' ? 'Direct collaboration enabled' : 'Approved members can collaborate directly'}</span></div>
+            </div> : (
+              <div className="rounded-xl border border-[hsl(var(--line))] p-4">
+                {!isMember ? <>{groupFull ? <p className="text-sm text-amber-600">This community is full.</p> : group.group.discoverable ? <div className="flex flex-col gap-3 sm:flex-row sm:items-center"><input value={requestMessage} onChange={e=>setRequestMessage(e.target.value)} className="min-w-0 flex-1 rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"/><Button onClick={requestJoin}><UserPlus size={14}/> Request to join</Button></div> : <p className="text-sm text-slate-500">This community is not accepting public join requests.</p>}</> : <div className="flex items-center justify-between gap-3"><p className="text-sm text-emerald-600">You are a member with direct roadmap collaboration access. Everyone with edit access works on the same roadmap.</p><Button variant="outline" onClick={()=>removeMember(group.membership!.userId)}><LogOut size={14}/> Leave</Button></div>}
+              </div>
+            )}
+
+            {canInviteMembers && <div id="group-invite" className="rounded-xl border border-[hsl(var(--line))] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3"><div><h3 className="font-medium">Invite to group</h3><p className="text-xs text-slate-500">Any member can invite people. Direct group collaboration is enabled for contributors.</p></div><Badge>{selectedInvitees.length} selected</Badge></div>
+              <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]"><input value={memberSearch} onChange={e=>setMemberSearch(e.target.value)} placeholder="Search by name or email…" className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"/><select value={inviteRole} onChange={e=>setInviteRole(e.target.value as any)} className="rounded-xl border border-[hsl(var(--line))] bg-transparent px-3 py-2 text-sm"><option value="viewer">Viewer</option><option value="contributor">Contributor</option><option value="editor">Editor</option></select><Button onClick={inviteSelected} disabled={!selectedInvitees.length}>Add selected</Button></div>
+              {!!memberResults.length && <div className="mt-3 grid gap-2 md:grid-cols-2">{memberResults.map(u=><button key={u.id} type="button" onClick={()=>setSelectedInvitees(v=>v.includes(u.id)?v.filter(id=>id!==u.id):[...v,u.id])} className={`rounded-xl border p-3 text-left ${selectedInvitees.includes(u.id)?'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30':'border-[hsl(var(--line))]'}`}><div className="font-medium text-sm">{u.fullName}</div><div className="text-xs text-slate-500">{u.email}</div></button>)}</div>}
+            </div>}
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-[hsl(var(--line))] p-4"><div className="mb-3 flex items-center justify-between"><h3 className="font-medium">Members</h3><Badge>{group.memberCount ?? group.members.length}</Badge></div><div className="space-y-2">{group.members.map(m=><div key={m.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 p-2 dark:bg-slate-900"><div className="min-w-0"><div className="truncate text-sm">{m.userId}</div><div className="text-[11px] text-slate-500">{m.role}</div></div>{isOwner && m.userId !== group.group!.ownerId && <div className="flex items-center gap-1"><select value={m.role} onChange={e=>void updateMemberRole(m.userId,e.target.value as any)} className="rounded-lg border border-[hsl(var(--line))] bg-transparent px-2 py-1 text-[10px]"><option value="viewer">Viewer</option><option value="contributor">Contributor</option><option value="editor">Editor</option></select><Button variant="ghost" onClick={()=>removeMember(m.userId)} title="Remove member"><X size={14}/></Button></div>}</div>)}</div></div>
+              {canManageGroupRequests && <div className="rounded-xl border border-[hsl(var(--line))] p-4"><div className="mb-3 flex items-center justify-between"><h3 className="font-medium">Join requests</h3><Badge>{group.pendingRequests.length}</Badge></div><div className="space-y-3">{group.pendingRequests.length?group.pendingRequests.map(r=><div key={r.id} className="rounded-lg border border-[hsl(var(--line))] p-3"><div className="text-sm font-medium break-all">{r.requesterId}</div>{r.message&&<p className="mt-1 text-xs text-slate-500">{r.message}</p>}<div className="mt-2 flex gap-2"><Button onClick={()=>reviewRequest(r.id,'accept')}><Check size={14}/> Accept</Button><Button variant="outline" onClick={()=>reviewRequest(r.id,'reject')}><X size={14}/> Reject</Button></div></div>):<p className="text-sm text-slate-500">No pending requests.</p>}</div></div>}
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+
+    {directGroupCollab ? (
+      <section id="group-chat" className="mt-6">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">{groupKind === 'community' ? 'Community workspace' : 'Team workspace'}</h2>
+            <p className="text-xs text-slate-500">Chat on the left and work on the same roadmap on the right. Both panes stay available together.</p>
+          </div>
+          <Badge>Live {groupKind === 'community' ? 'community' : 'team'} collaboration</Badge>
+        </div>
+        <div className="team-workspace-scroll" aria-label="Team workspace panels">
+          <section className="team-workspace-pane team-chat-pane">
+            <div className="team-workspace-pane-head">
+              <div><div className="font-semibold">Group chat</div><div className="text-[11px] text-slate-500">Discuss tasks, resources and roadmap changes with the group.</div></div>
+            </div>
+            <div className="team-workspace-pane-body team-chat-body"><GroupChat roadmapId={roadmapId}/></div>
+          </section>
+          <section className="team-workspace-pane team-roadmap-pane">
+            <div className="team-workspace-pane-head">
+              <div><div className="font-semibold">Shared roadmap</div><div className="text-[11px] text-slate-500">All team members with edit access work directly on the same roadmap.</div></div>
+              <div className="flex items-center gap-2">
+                <a href={`/roadmap/${roadmapId}`} className="rounded-lg border border-[hsl(var(--line))] px-2.5 py-1.5 text-[11px] font-semibold">Full editor</a>
+              </div>
+            </div>
+            <div className="team-workspace-pane-body team-roadmap-body"><RoadmapTree sharedRoadmapId={roadmapId}/></div>
+          </section>
+        </div>
+      </section>
+    ) : (
+      <Card className="mt-6 p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Direct collaboration</h2>
+            <p className="mt-1 max-w-2xl text-sm text-slate-500">Members with edit access work directly on the shared roadmap. There are no branches, commits, pull requests, or merge steps in this collaboration flow.</p>
+          </div>
+          {!isMember && <Badge>Membership required</Badge>}
+        </div>
+        {isMember && group?.membership?.role !== 'viewer' ? (
+          <div className="mt-5 flex flex-wrap gap-2">
+            <a href={`/roadmap/${roadmapId}`} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"><ExternalLink size={14}/> Open shared editor</a>
+            <a href="#group-chat" className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--line))] px-3 py-2 text-sm font-semibold"><Users size={14}/> Group chat</a>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-500">Once your membership is approved with edit access, the shared roadmap will be available here for direct collaboration.</p>
+        )}
+      </Card>
+    )}
+
+    {!directGroupCollab && isMember && group?.group && (
+      <div id="group-chat" className="mt-5"><GroupChat roadmapId={roadmapId}/></div>
+    )}
+  </AppShell>
+}

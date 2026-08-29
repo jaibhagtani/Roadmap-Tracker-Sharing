@@ -1,0 +1,7 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { db } from '@/lib/db';
+import { createSession, SESSION_COOKIE } from '@/lib/server-auth';
+import { verifyOtp } from '@/lib/otp';
+const schema = z.object({ userId: z.string().uuid(), otp: z.string().regex(/^\d{6}$/) });
+export async function POST(req: Request) { try { const { userId, otp } = schema.parse(await req.json()); const user = await db.user.findUnique({ where: { id: userId } }); if (!user) return NextResponse.json({ error: 'Account not found.' }, { status: 404 }); if (user.emailVerifiedAt) return NextResponse.json({ error: 'Account is already verified.' }, { status: 400 }); const result = await verifyOtp(userId, otp); if (!result.ok) return NextResponse.json({ error: result.reason === 'locked' ? 'Too many incorrect attempts. Request a new code.' : result.reason === 'expired' ? 'Code expired. Request a new code.' : 'Invalid verification code.' }, { status: 400 }); await db.user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date() } }); const { token, expiresAt } = await createSession(userId); const res = NextResponse.json({ ok: true, user: { id: user.id, email: user.email, fullName: user.fullName }, session: { issuedAt: Date.now() } }); res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', expires: expiresAt }); return res; } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'Verification failed.' }, { status: 400 }); } }
